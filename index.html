@@ -1,1 +1,491 @@
-hello world
+<!DOCTYPE html>
+<html>
+<head>
+<title>VS2 Test Jig with midi</title>
+<script src="parsemidifile.js"></script>
+<style>
+body{
+	--renderBackground:#222;
+	font-family: Arial, Helvetica, sans-serif;
+	padding:20px;
+}
+input{
+	margin:5px;
+}
+label:after {
+  content: attr(data-value);
+  margin-left: 5px;
+}
+select{
+	margin:5px;
+}
+#controls[disabled]{
+	pointer-events: none;
+	opacity: 0.5;
+}
+#controls[disabled] button{
+	opacity: 0.5;		
+}
+</style>
+</head>
+<body>
+<h3>nitrologic Synth Vicious Test Jig with MIDI music Player</h3>
+<button onclick="startAudio()">Start</button>
+<button onclick="stopAudio()">Stop</button>
+<div id="controls" disabled>
+	<button onclick="playMusic()">Play Music</button>
+	<button onclick="stopMusic()">Stop Music</button>
+	<button onclick="snapshot()">Snapshot</button>
+	<button onclick="playNote()">Note On</button>
+	<button onclick="stopNote()">Note Off</button>
+	<button onclick="playChord()">Chord On</button>
+	<button onclick="stopChord()">Chord Off</button>
+	<button onclick="record()">Record</button>
+	<button onclick="stop()">Stop</button>
+	<br>
+</div>
+<div id="recordings">
+</div>
+
+<pre id="output"></pre>
+<script>
+const units = [
+	"control","voice","effect","arp","filter","lfo","amp"
+];
+const spec = {
+	control: {
+		tempo: { type: "range", min:20, max:240, default:120},
+		pitch: { type: "range", min:0, max:16384, default:8192},
+		pan: { type:"range", min:0,max:127, default:64},
+		sustain: { type: "checkbox", default: false, control: 64 },
+		hold: { type: "checkbox", default: false, control: 49 },
+		effects: { type: "checkbox", default: false, control: 50 },
+	},
+	effect: {
+		position_pan: { type: "range", min: -1, max: 1, default: 0 },
+		distortion_overdrive: { type: "range", min: 0, max: 100, default: 20, power: 1 },
+		distortion_gain: { type: "range", min: 0, max: 2, default: 0.4, power: 1 },
+		reverb_wet: { type: "range", min: 0, max: 1, default: 0.3, power: 1 },
+		reverb_dry: { type: "range", min: 0, max: 1, default: 0.7, power: 1 },
+		reverb_falloff: { type: "range", min: 0, max: 2, default: 0.8, power: 1 }
+	},
+	voice: {
+		oscillator: { type: "select", options: ["Noise", "Sine", "Square", "Triangle", "Sawtooth", "Rompler"], default:3 },
+		power: { type: "select", options: [1, 3, 5, 0.5, 0.3333], default: 1 },
+		envelope: { type: "select", options: ["Flat", "Percussive", "Sharp", "Long Decay", "Swell"], default:1 },
+		mode: { type: "select", options: ["Mono", "Poly", "External"], default:1 }
+	},
+	arp: {
+		algo: { type: "select", options: ["Still", "Natural", "Ascend", "Descend", "Tidal", "Wander", "Disorder"] },
+		prog: { type: "select", options: ["Clean", "Otto Loop", "Otto Rebel", "Deviant Rise", "Deviant Fall", "Janus Pivot", "Hydra Express", "Sisyphus Roll", "Entropy Shuffle", "Phoenix Rebirth", "Prometheus Bound", "Labyrinth Drift", "Oracle Pulse", "Origami Fold", "Elysian Echo", "Quantum Weave"] }
+	},
+	filter: {
+		type: { type: "select", options: ["Lowpass", "Highpass", "Bandpass", "Notch", "Allpass"] },
+		cutoff: { type: "range", min: 20, max: 24000, default: 500, power: 1 },
+		Q: { type: "range", min: 0.1, max: 50, default: 0.707, power: 0.5 }
+	},
+	lfo: {
+		type: { type: "select", options: ["Noise", "Sine", "Square", "Triangle", "Sawtooth", "Rompler"], default:1 },
+		freq: { type: "range", min: 0.01, max: 20, default: 1, power: 0.5 },
+		gain: { type: "range", min: 0, max: 1, default: 0.1, power: 1 }
+	},
+	amp: {
+		target: { type: "select", options: ["tremolo", "vibrato", "filter.cutoff", "filter.q", "lfo.fade", "lfo.rate", "amp.gain", "amp.phase", "control.value"] },
+		factor: { type: "range", min: 0, max: 10, default: 1, power: 1 }
+	}
+};
+
+function getElement(name){
+	return document.getElementById(name);
+}
+
+var midiTimeouts = [];
+var context;
+var synthNode;
+var gainNode;
+var synthState;
+var synthLog=[];
+var synthLabel={};
+
+let output=getElement("output");
+let controls=getElement("controls");
+
+function log(line){
+	output.innerHTML+=line+"\n";
+}
+
+
+function onData(state){
+	synthState=state;
+	synthLog.push(state.synthLog);
+//	for(let line of state.synthLog){log(line);}
+	log(JSON.stringify(state,null, "\t"));
+}
+
+async function startAudio() {
+	context = new AudioContext({ sampleRate: 48000 });
+	await context.audioWorklet.addModule("worker-vsynth.js");
+	class VSynthNode extends AudioWorkletNode {
+		constructor(context) {
+			super(context, "VSynthAudioProcessor", { channelCount: 2, channelCountMode: "explicit" });
+			this.port.onmessage = (e) => {
+				switch(e.data.name){
+					case "midz":
+						onData(e.data.state);
+						break;
+					case "vsynth":
+						onAudio(e.data);
+						break;
+					default:
+						console.log("unhandled data name:"+e.data.name);
+				}
+			};
+		}
+		post(message) { this.port.postMessage(message); }
+	}
+	gainNode=context.createGain();
+	gainNode.gain.value=0.2;
+	gainNode.connect(context.destination);
+	synthNode = new VSynthNode(context);
+	synthNode.connect(gainNode);
+	context.resume();
+	controls.removeAttribute("disabled");
+	let state = sampleState();
+	for (let unit of units) {
+		updateUnit(unit, state);
+	}
+}
+
+function stopAudio() {
+	if (context) {
+		context.close();
+		context = null; // Nullify the reference
+	}
+	controls.setAttribute("disabled", "true");
+}
+
+function generateUI() {
+	const controls = getElement("controls");
+	for(const category of units ){
+		const unit=spec[category];
+		for (const [param, config] of Object.entries(unit)) {
+			const id = category+"_"+param;
+			const label = document.createElement("label");
+			label.textContent=id;
+			synthLabel[id]=label;
+			let element;
+			switch(config.type){
+				case "select":
+					element = document.createElement("select");
+					config.options.forEach((opt, i) => {
+						const option = document.createElement("option");
+						option.value = config.options.length === 5 && param === "power" ? opt : i; // Special case for power values
+						option.textContent = opt;
+						element.appendChild(option);
+					});
+					element.selectedIndex=config.default||0;
+					break;
+				case "range":
+					element = document.createElement("input");
+					element.type = "range";
+					element.step = "any";
+					element.min = config.min;
+					element.max = config.max;
+					element.value = config.default;
+					break;
+				case "checkbox":
+					element = document.createElement("input");
+					element.type = "checkbox";
+					element.checked = config.default || false;  // Default to unchecked if no value is set
+					break;					
+			}
+			element.id = id;
+			element.onchange = () => onChange(element);
+			element.oninput = () => onChange(element);
+			label.appendChild(element);
+			controls.appendChild(label);
+			controls.appendChild(document.createElement("br"));
+		}
+	}
+	let state=sampleState();
+}
+
+function sampleState() {
+	const state = {};
+	for (const section in spec) {
+		state[section] = {};
+		for (const param in spec[section]) {
+			const control = spec[section][param];
+			const id = section+"_"+param;
+			const element = getElement(id);
+			if (element) {
+				switch (control.type) {
+					case "select":
+						state[id]=element.value|0;
+						break;
+					case "range":
+						state[id]=parseFloat(element.value);
+						const label = synthLabel[id];
+						label.setAttribute("data-value",state[id].toFixed(3));
+						break;
+					case "checkbox":
+						state[id]=element.checked;
+						break;
+					default:
+						console.warn(`Unhandled control type: ${control.type}`);
+				}
+			}
+		}
+	}
+	return state;
+}
+
+function updateUnit(unit, state) {
+	switch (unit) {
+		case "effect":
+			let commands=[];
+			for(const [key,def] of Object.entries(spec.effect)){
+				let value=state["effect_"+key];
+				if(value) {
+					commands.push({command:"effect",control:key,value});
+					console.log("update effect key:"+key+" value:"+value);
+				}
+			}
+			if(commands.length){
+				synthNode?.post(commands);
+			}
+			break;
+		case "control":
+			synthNode?.post([
+				{command: "controlchange", control: 50, value:state.control_effects?127:0},
+				{command: "controlchange", control: 64, value:state.control_sustain?127:0},
+				{command: "tempo", bpm:state.control_tempo},
+				{command: "controlchange", control: 224, value:state.control_pitch},
+				{command: "controlchange", control:10, value:state.control_pan}
+			]);
+			break;
+		case "voice":
+			synthNode?.post([{ 
+				command: "voice", 
+				oscillator: state.voice_oscillator, 
+				power: state.voice_power, 
+				envelope: state.voice_envelope, 
+				mode: state.voice_mode 
+			}]);
+			break;
+		case "arp":
+			synthNode?.post([{ 
+				command: "arp", 
+				algo: state.arp_algo, 
+				prog: state.arp_prog 
+			}]);
+			break;
+		case "filter":
+			synthNode?.post([{ 
+				command: "filter", 
+				index: 0, 
+				enabled: true, 
+				type: state.filter_type, 
+				cutoff: state.filter_cutoff, 
+				Q: state.filter_Q 
+			}]);
+			break;
+		case "lfo":
+			synthNode?.post([{ 
+				command: "lfo", 
+				index: 0, 
+				oscillator: state.lfo_type, 
+				frequency: state.lfo_freq, 
+				gain: state.lfo_gain 
+			}]);
+			break;
+		case "amp":
+			synthNode?.post([{ 
+				command: "amp", 
+				id: "amp0", 
+				lfo: 0, 
+				target: state.amp_target, 
+				index: 0,
+				factor: state.amp_factor 
+			}]);
+			break;
+		default:
+			console.log("Unhandled unit name: " + unit);
+	}
+}
+
+function onChange(element) {
+	let state=sampleState(spec);
+	const [unit, param] = element.id.split("_");
+	updateUnit(unit,state);
+}
+
+function setVoice() {
+	let state=sampleState(spec);
+	const oscillator = state.voice_oscillator;
+	const power = state.voice_power;
+	const envelope = state.voice_envelope;
+	const mode = state.voice_mode;
+	synthNode?.post([		
+		{ command: "voice", oscillator, power, envelope, mode },
+	]);
+}
+
+function playNote() {
+	setVoice();
+	synthNode?.post([
+		{ command: "noteon", note: 64, velocity: 100 }
+	]);
+}
+
+function stopNote() {
+	synthNode?.post([{ command: "noteoff", note: 64 }]);
+}
+
+function playChord() {
+	synthNode?.post([		
+		{ command: "noteon", note: 60, velocity: 100 }, // C
+		{ command: "noteon", note: 64, velocity: 100 }, // E
+		{ command: "noteon", note: 67, velocity: 100 } // G
+	]);
+}
+
+function stopChord() {
+	synthNode?.post([
+		{ command: "noteoff", note: 60 },
+		{ command: "noteoff", note: 64 },
+		{ command: "noteoff", note: 67 }
+	]);
+}
+
+function snapshot(){
+	synthNode?.post([{command:"snapshot"}]);
+}
+
+generateUI();
+
+function playMusic() {
+	if (!synthNode) {
+		log("Start audio first!");
+		return;
+	}
+	fetch("fugue.mid")
+		.then(response => response.arrayBuffer())
+		.then(arrayBuffer => {
+			const bytes = new Uint8Array(arrayBuffer);
+			const midi = parseMIDI("fugue", bytes);
+			if (!midi) {
+				log("Failed to parse MIDI");
+				return;
+			}
+			stopMusic(); // Clear any prior playback
+			const startTime = performance.now();
+			midi.tracks.forEach(track => {
+				track.events.forEach(event => {
+					const delay = event.time; // Milliseconds from dspmidifile.js
+					const timeout = setTimeout(() => {
+						switch (event.name) {
+							case "note on":
+								synthNode.post([{ command: "noteon", note: event.note, velocity: event.velocity }]);
+								break;
+							case "note off":
+								synthNode.post([{ command: "noteoff", note: event.note }]);
+								break;
+							case "control change":
+								synthNode.post([{ command: "controlchange", control: event.control, value: event.value }]);
+								break;
+							case "pitch bend":
+								synthNode.post([{ command: "controlchange", control: 224, value: event.value }]);
+								break;
+							case "meta":
+								if (event.meta.tempo) {
+									const bpm = (60e6 / event.meta.tempo) | 0;
+									synthNode.post([{ command: "tempo", bpm }]);
+								}
+								break;
+						}
+					}, delay);
+					midiTimeouts.push(timeout);
+				});
+			});
+			log("Playing MIDI: " + midi.name);
+		})
+		.catch(err => log("Fetch MIDI failed: " + err));
+}
+
+function stopMusic() {
+	midiTimeouts.forEach(clearTimeout);
+	midiTimeouts = [];
+	synthNode?.post([{ command: "controlchange", control: 123, value: 0 }]); // All Notes Off
+	log("MIDI stopped");
+}
+
+// pcm is {audio count left right name}
+
+const MaxSamples=48000*5*60;
+var pcmRaw=new Uint8Array(MaxSamples*4);
+var pcmCount = 0;
+function onAudio(pcm){
+	if(pcm.audio){
+		let n=pcm.count;
+		let l=pcm.left;
+		let r=pcm.right;
+		let o=pcmCount;
+		pcmCount+=n*4;
+		for(let i=0;i<n;i++){
+			let ll=l[i];if(ll<-1)ll=-1;if(ll>1)ll=1;
+			let rr=r[i];if(rr<-1)rr=-1;if(rr>1)rr=1;
+			ll=Math.sin(i/10);
+			rr=Math.cos(i/12);
+			let l16=(ll*32767)|0;
+			let r16=(rr*32767)|0;
+			pcmRaw[o+i*4+0]=l16&255;
+			pcmRaw[o+i*4+1]=l16>>>8;
+			pcmRaw[o+i*4+2]=r16&255;
+			pcmRaw[o+i*4+3]=r16>>8;
+		}
+	}
+}
+
+function record(){
+	synthNode?.post([{ command: "controlchange", control:44, value:127 }]);
+}
+
+function stop(){
+	synthNode?.post([{ command: "controlchange", control:44, value:0 }]);
+	if (pcmCount==0) return;
+	let raw=pcmRaw.subarray(0,pcmCount);
+	pcmCount=0;
+	let blob=audioBufferToWav(raw,48000);
+	const url = URL.createObjectURL(blob);
+	const parent=document.getElementById("recordings");
+	const a=document.createElement("a");
+	const n=parent.children.length;
+	a.href = url;
+	a.download = "vsynthrecording"+n+".wav";
+	a.textContent = "Download Recording " + n;	
+	parent.appendChild(a);
+}
+
+function audioBufferToWav(samples, sampleRate) {
+	const count = samples.length;
+	const wav = new ArrayBuffer(44);
+	const view = new DataView(wav);
+	view.setUint8(0, 0x52); view.setUint8(1, 0x49); view.setUint8(2, 0x46); view.setUint8(3, 0x46);
+	view.setUint32(4, 36 + count, true);
+	view.setUint8(8, 0x57); view.setUint8(9, 0x41); view.setUint8(10, 0x56); view.setUint8(11, 0x45);
+	view.setUint8(12, 0x66); view.setUint8(13, 0x6d); view.setUint8(14, 0x74); view.setUint8(15, 0x20);
+	view.setUint32(16, 16, true);
+	view.setUint16(20, 1, true);
+	view.setUint16(22, 2, true);
+	view.setUint32(24, sampleRate, true);
+	view.setUint32(28, sampleRate * 4, true);
+	view.setUint16(32, 4, true);
+	view.setUint16(34, 16, true);
+	view.setUint8(36, 0x64); view.setUint8(37, 0x61); view.setUint8(38, 0x74); view.setUint8(39, 0x61);
+	view.setUint32(40, count, true);
+	return new Blob([wav,samples], { type: "audio/wav" });
+}
+</script>
+</body>
+</html>
