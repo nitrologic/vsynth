@@ -1,5 +1,9 @@
+![synth vicious test jig](vicious.png)
+
+
 # vsynth
-synth vicious music and audio tool
+
+synth vicious sound engine
 
 # link
 
