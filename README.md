@@ -3,7 +3,7 @@ synth vicious music and audio tool
 
 # link
 
-coming soon
+https://nitrologic.github.io/vsynth/
 
 # development
 
