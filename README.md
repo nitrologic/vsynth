@@ -1,4 +1,4 @@
-![synth vicious test jig](vicious.png)
+![synth vicious test jig](media/vicious.png)
 
 
 # vsynth
