@@ -13,3 +13,6 @@ https://nitrologic.github.io/vsynth/
 
 https://github.com/nitrologic/vsynth
 
+# dsptool integration
+
+https://www.youtube.com/watch?v=U8-qkxWCn2Y
