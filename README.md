@@ -3,7 +3,7 @@
 
 # vsynth
 
-synth vicious sound engine
+The synth vicious audio engine at it's core is a modern web worker capable of some heavy lifting signal paths.
 
 # link
 
