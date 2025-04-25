@@ -1,5 +1,4 @@
-![synth vicious test jig](media/vicious.png)
-
+<img src="media/vicious.png" height="400" />
 
 # vsynth
 
