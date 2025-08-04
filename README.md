@@ -7,6 +7,7 @@
 # vsynth
 
 Second generation synth vicious sound engine
+The synth vicious audio engine at it's core is a modern web worker capable of some heavy lifting signal paths.
 
 # test interface
 
@@ -22,7 +23,6 @@ https://github.com/nitrologic/vsynth
 
 https://www.youtube.com/watch?v=U8-qkxWCn2Y
 
+# history
 
-# original vsynth project
-
-https://nitrologic.itch.io/synth-vicious
+The original monkey2 [Synth Vicious](https://nitrologic.itch.io/synth-vicious)
